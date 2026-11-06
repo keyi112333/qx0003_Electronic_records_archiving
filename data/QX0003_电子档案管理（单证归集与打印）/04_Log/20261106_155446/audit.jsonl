@@ -1,0 +1,4 @@
+{"time": "2026-11-06 15:54:46", "stage": "run", "declaration": "", "action": "start", "result": "开始", "detail": {"params": "公司=全部；报关单=共享目录全部；期间=不限；stage=all"}}
+{"time": "2026-11-06 15:54:51", "stage": "declaration", "declaration": "泰兴金江化学工业有限公司:1234567890", "action": "start", "result": "开始", "detail": {"export_date": "2026-10-19", "contract_no": "TSD20261104014"}}
+{"time": "2026-11-06 15:54:57", "stage": "declaration", "declaration": "泰兴金江化学工业有限公司:1234567890", "action": "end", "result": "待人工", "detail": {"error": "按报关单号筛选后仍分页，无法确认主表是否已存在；禁止新建"}}
+{"time": "2026-11-06 15:54:57", "stage": "run", "declaration": "", "action": "end", "result": "完成", "detail": {"total": 1, "pdf": 0, "failed": 0}}

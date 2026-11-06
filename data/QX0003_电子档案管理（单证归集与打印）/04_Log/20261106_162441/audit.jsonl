@@ -1,0 +1,3 @@
+{"time": "2026-11-06 16:24:41", "stage": "run", "declaration": "", "action": "start", "result": "开始", "detail": {"params": "公司=全部；报关单=共享目录全部；期间=不限；stage=all"}}
+{"time": "2026-11-06 16:24:46", "stage": "declaration", "declaration": "泰兴金江化学工业有限公司:1234567890", "action": "start", "result": "开始", "detail": {"export_date": "2026-10-19", "contract_no": "TSD20261104014"}}
+{"time": "2026-11-06 16:24:52", "stage": "collect", "declaration": "泰兴金江化学工业有限公司:1234567890", "action": "collect", "result": "部分收集", "detail": {"items": 6, "missing": [{"kind": "合同", "reason": "未收集到"}, {"kind": "提单", "reason": "未收集到"}], "notes": ["一卡通无该合同附件", "BIP无销售发票附件"]}}

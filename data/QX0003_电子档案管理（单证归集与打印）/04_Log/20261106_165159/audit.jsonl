@@ -1,0 +1,6 @@
+{"time": "2026-11-06 16:51:59", "stage": "run", "declaration": "", "action": "start", "result": "开始", "detail": {"params": "公司=全部；报关单=共享目录全部；期间=不限；stage=all"}}
+{"time": "2026-11-06 16:51:59", "stage": "declaration", "declaration": "泰兴金江化学工业有限公司:1234567890", "action": "start", "result": "开始", "detail": {"export_date": "2026-10-19", "contract_no": "TSD20261104014"}}
+{"time": "2026-11-06 16:52:00", "stage": "collect", "declaration": "泰兴金江化学工业有限公司:1234567890", "action": "collect", "result": "部分收集", "detail": {"items": 6, "missing": [], "notes": ["一卡通无该合同附件", "BIP无销售发票附件", "未读取组织规则，必要附件完整性待OA阶段判定"]}}
+{"time": "2026-11-06 16:52:06", "stage": "collect", "declaration": "泰兴金江化学工业有限公司:1234567890", "action": "rules", "result": "部分收集", "detail": {"required": ["报关单", "合同", "放行通知单", "提单", "电子委托协议"], "missing": [{"kind": "合同", "reason": "未收集到"}, {"kind": "提单", "reason": "未收集到"}]}}
+{"time": "2026-11-06 16:53:01", "stage": "declaration", "declaration": "泰兴金江化学工业有限公司:1234567890", "action": "end", "result": "失败", "detail": {"error": "OA保存并关闭后表单未关闭，保存结果待核验；禁止重试保存"}}
+{"time": "2026-11-06 16:53:01", "stage": "run", "declaration": "", "action": "end", "result": "完成", "detail": {"total": 1, "pdf": 0, "failed": 1}}
