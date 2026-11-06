@@ -9,6 +9,7 @@ import os
 import shutil
 import time
 from copy import copy
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
 
@@ -16,6 +17,7 @@ from log.loggingConfig import logger
 from workflows.qx0003_archive.models import (
     STATUS_PDF,
     Attachment,
+    CollectionHistory,
     Declaration,
     OaSyncResult,
     PdfResult,
@@ -154,6 +156,74 @@ class ResultWorkbook:
         finally:
             if workbook is not None:
                 workbook.close()
+
+    def sync_history(self, company: str, year: int,
+                     rows: List[CollectionHistory]) -> dict:
+        """按(报关单号,合同编号)比对单张收集的状态与附件更新时间并回写结果表。
+
+        只有单张收集的值比结果表新时才更新；结果表不存在时跳过。
+        """
+        path = (self.root / company / str(year)
+                / f"{company}-电子档案管理（单证归集与打印）-运行结果表-{year}.xlsm")
+        if not path.is_file():
+            return {"matched": 0, "status": 0, "time": 0}
+        import openpyxl
+        workbook = openpyxl.load_workbook(path, keep_vba=True)
+        try:
+            sheet = workbook[DETAIL_SHEET]
+            headers = self._headers(sheet)
+            self._validate_detail(headers)
+            number_col = headers.index("报关单号")
+            contract_col = self._column(headers, ("合同号", "合同编号"))
+            status_col = self._column(headers, ("状态",))
+            index, by_number = {}, {}
+            for row in range(2, sheet.max_row + 1):
+                number = str(sheet.cell(row=row, column=number_col + 1).value or "").strip()
+                if not number:
+                    continue
+                contract = (str(sheet.cell(row=row, column=contract_col + 1).value or "").strip()
+                            if contract_col is not None else "")
+                index.setdefault((number, contract), row)
+                by_number.setdefault(number, []).append(row)
+            matched = status_count = time_count = 0
+            for history in rows:
+                number = str(history.declaration_no or "").strip()
+                contract = str(history.contract_no or "").strip()
+                row = index.get((number, contract))
+                if row is None:
+                    candidates = by_number.get(number) or []
+                    if len(candidates) == 1:
+                        row = candidates[0]
+                if row is None:
+                    continue
+                matched += 1
+                if history.status and status_col is not None:
+                    cell = sheet.cell(row=row, column=status_col + 1)
+                    if str(cell.value or "").strip() != history.status:
+                        cell.value = history.status
+                        status_count += 1
+                for kind, value in history.attachment_times.items():
+                    columns = ATTACHMENT_COLUMNS.get(kind)
+                    if not columns:
+                        continue
+                    col = self._column(headers, columns[2])
+                    incoming = parse_datetime(value)
+                    if col is None or incoming is None:
+                        continue
+                    cell = sheet.cell(row=row, column=col + 1)
+                    current = parse_datetime(cell.value)
+                    if current is not None and incoming <= current:
+                        continue
+                    cell.value = incoming
+                    cell.number_format = "yyyy-mm-dd hh:mm:ss"
+                    time_count += 1
+            if status_count or time_count:
+                self._save_with_retry(workbook, path)
+                logger.info("结果表历史比对已更新: %s/%s，状态%d处，附件时间%d处，命中%d行",
+                            company, year, status_count, time_count, matched)
+            return {"matched": matched, "status": status_count, "time": time_count}
+        finally:
+            workbook.close()
 
     @staticmethod
     def _headers(sheet) -> List[str]:

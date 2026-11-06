@@ -17,11 +17,15 @@ from log.loggingConfig import logger
 from utils.screenshot import take_error_screenshot
 from web.browser import BrowserManager
 from web.oa.pages import ArchiveOaAdapter
+from web.yikatong.pages import YikatongAdapter
 from workflows.qx0003_archive.models import (
     NEXT_MERGE_PDF,
+    STATUS_COLLECTING,
+    CollectionPackage,
     Declaration,
     OrganizationRules,
     RunItem,
+    normalize_type,
 )
 from workflows.qx0003_archive.subtask_collect import CollectSubtask
 from workflows.qx0003_archive.subtask_merge_pdf import MergePdfSubtask
@@ -48,6 +52,7 @@ class Qx0003MainTask(TaskBase):
         self.workbooks: Dict[str, List[Path]] = {}
         self.notifier = Notifier(config)
         self.audit: Optional[AuditLog] = None
+        self.history_synced = False
 
     def execute(self) -> bool:
         params = RunParams.from_config(self.config)
@@ -132,6 +137,8 @@ class Qx0003MainTask(TaskBase):
                 oa = self._ensure_oa()
                 rules = self._rules_for(oa, declaration)
                 collect_task.apply_rules(package, declaration, rules)
+                # 单张收集(DZSJ001)状态/附件更新时间与结果表比对，每轮只做一次。
+                self._sync_collection_history(oa, result_workbook)
                 # 模块二：OA 有记录走同步历史，无记录走新增（填表+上传附件+保存一次）。
                 sync = self._run_oa(oa, declaration, package)
 
@@ -233,7 +240,121 @@ class Qx0003MainTask(TaskBase):
                         description="OA登录")
         # 规则表只读一次；失败终止，避免缺失必要附件清单时继续写OA。
         self._read_rules(oa)
+        self._export_oa_tables(oa)
         return oa
+
+    def _export_oa_tables(self, oa) -> None:
+        """把单张收集(DZSJ001)与配置表(DZSJDYSX00)导出为临时Excel，供比对排查。"""
+        target = Path(self.config.get_path("temp")) / "oa_export" / self.run_id
+        tables = (
+            ("DZSJ001_单张收集", "export_collection_excel"),
+            ("DZSJDYSX00_单张收集打印顺序配置表", "export_rules_excel"),
+        )
+        for name, method in tables:
+            exporter = getattr(oa, method, None)
+            if exporter is None:
+                continue
+            try:
+                path = exporter(target / f"{name}.xlsx")
+                logger.info("OA导出临时Excel已保存: %s", path)
+            except Exception as exc:
+                logger.warning("OA导出临时Excel失败 %s: %s", name, exc)
+
+    def _sync_collection_history(self, oa, result_workbook: ResultWorkbook) -> None:
+        """单张收集状态/附件更新时间与结果表比对；每轮只执行一次。"""
+        if self.history_synced:
+            return
+        self.history_synced = True
+        try:
+            rows = call_with_retry(
+                oa.list_collection_history,
+                attempts=self.config.get_int("基础配置.重试次数", 3),
+                delay=self.config.get_float("基础配置.重试间隔（秒）", 5.0),
+                description="单张收集历史读取",
+            )
+        except Exception as exc:
+            logger.warning("单张收集历史读取失败，跳过结果表比对: %s", exc)
+            return
+        if not rows:
+            return
+        grouped = {}
+        for row in rows:
+            if not row.company or not row.export_date:
+                continue
+            grouped.setdefault((row.company, row.export_date.year), []).append(row)
+        for (company, year), items in grouped.items():
+            try:
+                counts = result_workbook.sync_history(company, year, items)
+                self.audit.write("sync", company, "history_compare", "完成",
+                                 {"year": year, **counts})
+            except Exception as exc:
+                logger.warning("结果表历史比对失败 %s/%s: %s", company, year, exc)
+                self.audit.write("sync", company, "history_compare", "失败",
+                                 {"year": year, "error": str(exc)})
+        self._refresh_yikatong_updates(oa, rows)
+
+    def _refresh_yikatong_updates(self, oa, rows) -> None:
+        """一卡通no留空查全部历史；比单张收集新且OA仍归集中的，删除旧行后重传。"""
+        targets = {}
+        for row in rows:
+            if (row.contract_no and row.declaration_no
+                    and str(row.status or "").strip() == STATUS_COLLECTING):
+                targets[row.contract_no.strip()] = row
+        if not targets:
+            return
+        adapter = YikatongAdapter(config=self.config)
+        try:
+            records = call_with_retry(
+                adapter.list_all,
+                attempts=self.config.get_int("基础配置.重试次数", 3),
+                delay=self.config.get_float("基础配置.重试间隔（秒）", 5.0),
+                description="一卡通全量查询",
+            )
+        except Exception as exc:
+            logger.warning("一卡通全量查询失败，跳过历史更新: %s", exc)
+            return
+        grouped = {}
+        for record in records:
+            no = str(record.get("no") or "").strip()
+            if no in targets:
+                grouped.setdefault(no, []).append(record)
+        for contract, files in grouped.items():
+            row = targets[contract]
+            changed = []
+            for record in files:
+                kind = normalize_type(str(record.get("filetype") or ""))
+                time_text = str(record.get("time") or "").strip()
+                if not kind or not time_text:
+                    continue
+                if time_text > str(row.attachment_times.get(kind) or ""):
+                    changed.append(record)
+            if not changed:
+                continue
+            declaration = Declaration(
+                company=row.company, declaration_no=row.declaration_no,
+                contract_no=contract, export_date=row.export_date, status=row.status)
+            try:
+                existing = oa.find_form(declaration)
+                if existing is None:
+                    logger.info("一卡通更新跳过，OA无记录: %s", declaration.key)
+                    continue
+                folder = (Path(self.config.get_path("temp")) / "yikatong_refresh"
+                          / f"{row.company}_{row.declaration_no}" / self.run_id)
+                items = adapter.download(declaration, changed, folder)
+                package = CollectionPackage(declaration_key=declaration.key, items=items)
+                task = OaHistorySyncSubtask(self.context, declaration, existing, package)
+                task.execute()
+                self.audit.write("sync", declaration.key, "yikatong_update", "完成", {
+                    "contract_no": contract,
+                    "kinds": [item.kind for item in items],
+                    "unresolved": task.sync_result.unresolved if task.sync_result else [],
+                })
+                logger.info("一卡通历史更新完成: %s，合同号=%s，文件%d个",
+                            declaration.key, contract, len(items))
+            except Exception as exc:
+                logger.warning("一卡通历史更新失败 %s: %s", declaration.key, exc)
+                self.audit.write("sync", declaration.key, "yikatong_update", "失败",
+                                 {"error": str(exc)})
 
     def _run_oa(self, oa, declaration: Declaration, package):
         existing = oa.find_form(declaration)

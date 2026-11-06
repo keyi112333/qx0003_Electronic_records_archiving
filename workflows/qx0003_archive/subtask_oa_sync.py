@@ -12,6 +12,7 @@ from core.retry import Verification
 from core.task_base import TaskBase
 from log.loggingConfig import logger
 from workflows.qx0003_archive.models import (
+    STATUS_COLLECTING,
     Attachment,
     CollectionPackage,
     Declaration,
@@ -112,13 +113,15 @@ class OaHistorySyncSubtask(TaskBase):
                 "added": len(result.added),
                 "updated": len(result.updated),
                 "deleted": len(result.deleted),
+                "replaced": len(result.replaced),
                 "unresolved": result.unresolved,
                 "status": declaration.status,
                 "next_action": result.next_action,
             })
-        logger.info("OA历史同步完成: %s，新增%d，更新%d，删除%d，未解决%d，下一步=%s",
+        logger.info("OA历史同步完成: %s，新增%d，更新%d，删除%d，替换%d，未解决%d，下一步=%s",
                     declaration.key, len(result.added), len(result.updated),
-                    len(result.deleted), len(result.unresolved), result.next_action)
+                    len(result.deleted), len(result.replaced),
+                    len(result.unresolved), result.next_action)
         return result
 
     def _apply_diff(self, result: OaSyncResult, declaration: Declaration,
@@ -129,19 +132,52 @@ class OaHistorySyncSubtask(TaskBase):
         package_map: Dict[tuple, Attachment] = {
             (item.kind, item.source_id): item for item in package.items if item.source_id
         }
-        result.added = [item for key, item in package_map.items() if key not in oa_map]
-        result.updated = [
-            item for key, item in package_map.items()
-            if key in oa_map and self._source_changed(oa_map[key], item)
-        ]
+        by_kind: Dict[str, List[Attachment]] = {}
+        for item in snapshot.items:
+            by_kind.setdefault(item.kind, []).append(item)
+
+        result.added, result.updated, result.replaced = [], [], []
+        for key, item in package_map.items():
+            if key in oa_map:
+                if self._source_changed(oa_map[key], item):
+                    result.updated.append(item)
+                continue
+            olds = by_kind.get(item.kind) or []
+            robot_olds = [old for old in olds if old.robot_managed]
+            if not olds:
+                result.added.append(item)
+                continue
+            if not robot_olds:
+                result.unresolved.append(
+                    f"同类型附件由非RPA归集，未替换: {item.kind}/{item.source_id}")
+                continue
+            if (self._newer_than(item, olds)
+                    and str(declaration.status or "").strip() == STATUS_COLLECTING):
+                # 待处理单据里有结果表同类型且时间更新的附件：删除OA旧行后重传。
+                result.replaced.append((item, robot_olds))
+            elif self._newer_than(item, olds):
+                # 状态已不是“附件归集中”时不改动附件，避免重复行。
+                result.unresolved.append(
+                    f"状态非附件归集中，未替换同类型附件: {item.kind}/{item.source_id}")
+            else:
+                result.added.append(item)
+
+        replaced_keys = {(old.kind, old.source_id)
+                         for _, olds in result.replaced for old in olds}
         if package.complete:
             result.deleted = [
                 item for key, item in oa_map.items()
-                if item.robot_managed and key not in package_map
+                if item.robot_managed and key not in package_map and key not in replaced_keys
             ]
         else:
             result.deleted = []
             logger.info("收集不完整，跳过删除同步: %s", declaration.key)
+
+    @staticmethod
+    def _newer_than(incoming: Attachment, olds: List[Attachment]) -> bool:
+        """源文件更新时间晚于OA同类型附件时间时返回True。"""
+        existing = max((str(old.effective_updated_at or "") for old in olds), default="")
+        return bool(incoming.updated_at) and str(incoming.updated_at) > existing
 
     @staticmethod
     def _source_changed(existing: Attachment, incoming: Attachment) -> bool:
@@ -156,6 +192,16 @@ class OaHistorySyncSubtask(TaskBase):
                 and bool(existing.updated_at) and bool(incoming.updated_at))
 
     def _execute(self, result: OaSyncResult, declaration: Declaration) -> None:
+        for item, olds in result.replaced:
+            for old in olds:
+                self.oa.delete_attachment(declaration, old)
+                verification, _ = self.oa.verify_deletion(declaration, old)
+                if verification != Verification.COMPLETED:
+                    result.unresolved.append(f"替换删除未回查: {old.kind}/{old.source_id}")
+            self.oa.upload_attachment(declaration, item)
+            verification, _ = self.oa.verify_attachment(declaration, item)
+            if verification != Verification.COMPLETED:
+                result.unresolved.append(f"替换上传未回查: {item.kind}/{item.source_id}")
         for item in result.added:
             self.oa.upload_attachment(declaration, item)
             verification, _ = self.oa.verify_attachment(declaration, item)

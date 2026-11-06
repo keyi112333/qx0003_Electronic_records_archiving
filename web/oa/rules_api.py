@@ -20,6 +20,8 @@ REQUIRED_SUFFIX = "是否必要"
 EXPORT_PATH = "/seeyon/rest/cap4/form/soap/export"
 TOKEN_PATH = "/seeyon/rest/token/{username}/{password}"
 DEFAULT_BEGIN = "2000-01-01 00:00:00"
+# 单张收集打印顺序配置表模板编号；未配置时使用该默认值。
+DEFAULT_TEMPLATE = "DZSJDYSX00"
 
 
 def _first_field(display, names):
@@ -148,5 +150,14 @@ class RulesApi:
         """返回 {组织编码: [OrganizationRules, ...]}；本轮运行内只请求一次。"""
         if self._cache is not None:
             return self._cache
-        self._cache = parse_rules(self.fetch_json(self.config.require("OA配置.规则模板编号")))
+        self._cache = parse_rules(self.fetch_json(self.template_code()))
         return self._cache
+
+    def template_code(self):
+        """配置表模板编号，未配置时使用 DZSJDYSX00。"""
+        return str(self.config.get("OA配置.规则模板编号") or DEFAULT_TEMPLATE)
+
+    def save_excel(self, target):
+        """把配置表导出写成临时xlsx，供与规则表比对。"""
+        from data_processing.oa_export import export_payload_to_xlsx
+        return export_payload_to_xlsx(self.fetch_json(self.template_code()), target)

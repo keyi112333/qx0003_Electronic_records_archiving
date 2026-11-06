@@ -38,6 +38,14 @@ FILE_NAME_RE = re.compile(
 FOLDER_RE = re.compile(r"^(?P<no>[^-]+)-(?P<contract>.+)$")
 DATE_IN_TEXT_RE = re.compile(r"(20\d{6})")
 
+# 一卡通「合同文件类型」字典；值为OA明细区使用的附件类型名。
+YIKATONG_FILETYPES = (
+    ("合同", "合同"),
+    ("提单", "提单"),
+    ("报关单", "报关单"),
+    ("放行条", "放行通知单"),
+)
+
 # 顺序很重要：先匹配更长、更具体的名称，再匹配“发票”“报关单”。
 KIND_PATTERNS = (
     ("国内运费形式发票", ("国内运费形式发票", "运费形式发票")),
@@ -349,12 +357,17 @@ class CollectSubtask(TaskBase):
             notes.extend(shared_notes)
             ambiguous = ambiguous or shared_ambiguous
 
-        # 一卡通：按合同号查询并下载。时间下限取配置值，保证首次归集也能取到历史附件。
+        # 一卡通：按合同号 + 文件类型查询并下载；共享盘已有的类型不重复取。
         if declaration.contract_no:
             try:
-                records = self.yikatong.list_records(declaration)
-                logger.info("一卡通查询完成: %s，合同号=%s，返回%d条",
-                            declaration.key, declaration.contract_no, len(records))
+                shared_kinds = {item.kind for item in items}
+                filetypes = [name for name, kind in YIKATONG_FILETYPES
+                             if kind not in shared_kinds]
+                records = (self.yikatong.list_records(declaration, filetypes=filetypes)
+                           if filetypes else [])
+                logger.info("一卡通查询完成: %s，合同号=%s，类型=%s，返回%d条",
+                            declaration.key, declaration.contract_no,
+                            "、".join(filetypes) or "无需查询", len(records))
                 folder = self.temp_dir / "collect" / f"{declaration.company}_{declaration.declaration_no}" / "yikatong"
                 ykt_items = self.yikatong.download(declaration, records, folder)
                 for item in ykt_items:

@@ -13,6 +13,43 @@ ZIP_MAGIC = b"PK\x03\x04"
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
+def _cell_text(cell) -> str:
+    """取导出单元格显示值；下拉字段的枚举ID仅作回退。"""
+    if not isinstance(cell, dict):
+        return ""
+    return str(cell.get("showValue") or cell.get("value") or "").strip()
+
+
+def export_payload_to_xlsx(payload, target) -> Path:
+    """把OA REST批量导出的JSON写成临时xlsx，供与结果表/规则表比对。"""
+    try:
+        import openpyxl
+    except ImportError as exc:
+        raise BusinessPending("写入OA导出临时Excel需要 openpyxl") from exc
+    body = payload.get("data") or {}
+    if str(body.get("success")) != "1":
+        raise BusinessPending("OA导出未成功: " + str(body.get("message") or body.get("code") or ""))
+    inner = body.get("data") or {}
+    fields = (inner.get("definition") or {}).get("fields") or []
+    if not fields:
+        raise BusinessPending("OA导出缺少字段定义")
+    workbook = openpyxl.Workbook()
+    try:
+        sheet = workbook.active
+        sheet.title = "导出数据"
+        sheet.append([str(field.get("display") or field.get("name") or "").strip()
+                      for field in fields])
+        for row in inner.get("data") or []:
+            master = row.get("masterData") or {}
+            sheet.append([_cell_text(master.get(field.get("name"))) for field in fields])
+        target_path = Path(target)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        workbook.save(target_path)
+        return target_path
+    finally:
+        workbook.close()
+
+
 def normalize_export_bytes(data: bytes, target) -> Path:
     """校验导出内容并写入目标路径，返回 Path。"""
     target_path = Path(target)

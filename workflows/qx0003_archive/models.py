@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 STATUS_COLLECTING = "附件归集中"
 STATUS_WAIT_USER = "待用户确认"
@@ -25,6 +25,7 @@ TYPE_ALIASES = {
     "报税核注清单": "保税核注清单",
     "保税核注清单": "保税核注清单",
     "放行单": "放行通知单",
+    "放行条": "放行通知单",
     "放行通知单": "放行通知单",
     "一卡通上的其它附件": "一卡通其他附件",
     "一卡通其他附件": "一卡通其他附件",
@@ -169,6 +170,25 @@ def next_action(declaration: Declaration) -> str:
 
 
 @dataclass
+class CollectionHistory:
+    """OA单张收集(DZSJ001)历史行，用于状态与附件更新时间比对。"""
+
+    company: str
+    declaration_no: str
+    contract_no: str = ""
+    export_date: Optional[date] = None
+    status: str = ""
+    created_by: str = ""
+    collected_pdf_path: str = ""
+    collected_pdf_time: Optional[datetime] = None
+    attachment_times: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def key(self):
+        return (str(self.declaration_no or "").strip(), str(self.contract_no or "").strip())
+
+
+@dataclass
 class Attachment:
     """附件项。"""
 
@@ -308,6 +328,8 @@ class OaSyncResult:
     added: List[Attachment] = field(default_factory=list)
     updated: List[Attachment] = field(default_factory=list)
     deleted: List[Attachment] = field(default_factory=list)
+    # 同类型但源文件更新：先删除OA旧行再上传新文件。
+    replaced: List[Tuple[Attachment, List[Attachment]]] = field(default_factory=list)
     unresolved: List[str] = field(default_factory=list)
     next_action: str = NEXT_WAIT_USER
     snapshot: Optional[Snapshot] = None

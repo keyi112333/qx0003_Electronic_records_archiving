@@ -14,7 +14,7 @@ from web.qx0003.adapters import OaAdapter
 from web.oa.attachment_operations import AttachmentOperations
 from web.oa.collection_api import CollectionApi
 from web.oa.detail_tables import DETAIL_TABLES, column_mapping
-from web.oa.rules_api import RulesApi, parse_rules
+from web.oa.rules_api import RulesApi
 from workflows.qx0003_archive.models import (
     Attachment, Declaration, PdfReceipt, Snapshot, parse_datetime,
 )
@@ -77,24 +77,11 @@ class ArchiveOaAdapter(AttachmentOperations, OaAdapter):
         self._rules_cache = None
 
     def read_all_rules(self):
-        """登录OA前预读配置表，供收集阶段判定必要附件；只读接口，不写回OA。
-
-        优先从DZSJDYSX00单张收集导出中读取公司名、必要附件及附件打印顺序；
-        该导出缺少配置字段时回退到OA配置.规则模板编号对应的配置表。
-        """
+        """读取配置表(DZSJDYSX00)，供判定必要附件与打印顺序；只读接口，不写回OA。"""
         if self.rules_api is None:
             raise ConfigError("OA适配器未注入配置，无法读取打印顺序配置表")
         if self._rules_cache is not None:
             return self._rules_cache
-        if self.collection_api is not None:
-            try:
-                rules = parse_rules(self.collection_api.fetch_json())
-                if rules:
-                    self._rules_cache = rules
-                    return rules
-            except Exception:
-                # 单张收集模板可能不含配置字段，回退到独立配置表。
-                pass
         self._rules_cache = self.rules_api.fetch()
         return self._rules_cache
 
@@ -103,6 +90,24 @@ class ArchiveOaAdapter(AttachmentOperations, OaAdapter):
         if self.collection_api is None:
             raise ConfigError("OA适配器未注入配置，无法读取单张收集单据")
         return self.collection_api.fetch()
+
+    def list_collection_history(self):
+        """单张收集历史行（状态+各类型附件更新时间），供与结果表比对。"""
+        if self.collection_api is None:
+            raise ConfigError("OA适配器未注入配置，无法读取单张收集历史")
+        return self.collection_api.history()
+
+    def export_collection_excel(self, target):
+        """导出单张收集(DZSJ001)为临时xlsx，供与历史结果表比对。"""
+        if self.collection_api is None:
+            raise ConfigError("OA适配器未注入配置，无法导出单张收集")
+        return self.collection_api.save_excel(target)
+
+    def export_rules_excel(self, target):
+        """导出打印顺序配置表(DZSJDYSX00)为临时xlsx，供与规则表比对。"""
+        if self.rules_api is None:
+            raise ConfigError("OA适配器未注入配置，无法导出配置表")
+        return self.rules_api.save_excel(target)
 
     def read_rules(self, declaration):
         """按公司名优先、组织编码兜底读取配置；多条配置不判定时阻断。"""

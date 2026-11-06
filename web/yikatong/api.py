@@ -58,15 +58,21 @@ def _get(base_url, payload, timeout):
         raise SystemFailure(f"一卡通接口网络错误: {exc.reason}") from None
 
 
-def query(contract_no, time_lower, base_url=None, key=None, timeout=30):
-    """按合同号 + 时间下限查询附件，返回 ``data`` 原始列表（每项含 id/name/url/time/filetype/no）。"""
+def query(contract_no, time_lower, filetypes=(), base_url=None, key=None, timeout=30):
+    """按合同号 + 时间下限 + 文件类型查询附件，返回 ``data`` 原始列表。
+
+    ``filetypes`` 使用字典「合同文件类型」的中文名称，可多个；
+    传空表示不限制类型。每项含 id/name/url/time/filetype/no。
+    """
     if not str(time_lower or "").strip():
         raise ConfigError("一卡通配置.时间下限不能为空")
+    if isinstance(filetypes, str):
+        filetypes = [filetypes]
     base_url = (base_url or DEFAULT_API_URL).rstrip("/")
     key = key or DEFAULT_KEY
     json_str = _dump({
         "no": str(contract_no or ""),
-        "filetype": "",
+        "filetype": ",".join(str(item).strip() for item in filetypes if str(item).strip()),
         "id": "",
         "time": str(time_lower),
         "state": "",

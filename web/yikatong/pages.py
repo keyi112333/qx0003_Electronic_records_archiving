@@ -64,13 +64,19 @@ class YikatongAdapter(SourceAdapter):
             content_hash=content_hash,
         )
 
-    def list_records(self, declaration, time_lower=None):
+    def list_records(self, declaration, filetypes=()):
         contract_no = str(declaration.contract_no or "").strip()
         if not contract_no:
             raise BusinessPending("一卡通查询缺少合同编号，不能按合同号定位附件")
         base_url, key = self._api()
-        return api.query(contract_no, time_lower or self._time_lower(),
+        return api.query(contract_no, self._time_lower(), filetypes=filetypes,
                          base_url=base_url, key=key)
+
+    def list_all(self, filetypes=()):
+        """no留空查询时间下限之后的全部合同文件，供历史比对使用。"""
+        base_url, key = self._api()
+        return api.query("", self._time_lower(), filetypes=filetypes,
+                         base_url=base_url, key=key, timeout=60)
 
     def download(self, declaration, records, temp_dir):
         temp_dir = Path(temp_dir)
